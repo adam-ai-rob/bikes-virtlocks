@@ -701,6 +701,7 @@ class AwsIotService {
     required String environment,
     String? thingTypeName,
     Map<String, String>? attributes,
+    String? policyName,
   }) async {
     // Create certificate first
     final cert = await createKeysAndCertificate();
@@ -718,20 +719,25 @@ class AwsIotService {
       principal: cert.certificateArn,
     );
 
-    // Attach policy to certificate
-    final policyName = AwsConstants.iotPolicyName(environment);
+    // Attach policy to certificate (use provided or fall back to default)
+    final effectivePolicyName = policyName ?? AwsConstants.iotPolicyName(environment);
     await attachPolicy(
-      policyName: policyName,
+      policyName: effectivePolicyName,
       target: cert.certificateArn,
     );
 
-    AppLogger.info('Created thing $thingName with certificate and policy');
+    AppLogger.info('Created thing $thingName with certificate and policy $effectivePolicyName');
 
     return (thing: thing, certificate: cert);
   }
 
   /// Delete a thing with its certificates
-  Future<void> deleteThingWithCertificates(String thingName) async {
+  /// If [skipCertificateDelete] is true, only detaches the certificate and deletes the thing
+  /// but does not delete the certificate (useful for shared certificates)
+  Future<void> deleteThingWithCertificates(
+    String thingName, {
+    bool skipCertificateDelete = false,
+  }) async {
     // Get attached certificates
     final principals = await listThingPrincipals(thingName);
 
@@ -739,22 +745,38 @@ class AwsIotService {
       // Detach from thing
       await detachThingPrincipal(thingName: thingName, principal: principal);
 
-      // Extract certificate ID from ARN
-      final certId = principal.split('/').last;
+      if (!skipCertificateDelete) {
+        // Extract certificate ID from ARN
+        final certId = principal.split('/').last;
 
-      // Deactivate certificate
-      await updateCertificateStatus(
-        certificateId: certId,
-        newStatus: 'INACTIVE',
-      );
+        // Deactivate certificate
+        await updateCertificateStatus(
+          certificateId: certId,
+          newStatus: 'INACTIVE',
+        );
 
-      // Delete certificate
-      await deleteCertificate(certId);
+        // Delete certificate
+        await deleteCertificate(certId);
+      }
     }
 
     // Delete thing
     await deleteThing(thingName);
 
     AppLogger.info('Deleted thing $thingName with all certificates');
+  }
+
+  /// Delete a certificate by ID (deactivates first, then deletes)
+  Future<void> deleteCertificateById(String certificateId) async {
+    // Deactivate certificate first
+    await updateCertificateStatus(
+      certificateId: certificateId,
+      newStatus: 'INACTIVE',
+    );
+
+    // Delete certificate
+    await deleteCertificate(certificateId);
+
+    AppLogger.info('Deleted certificate: $certificateId');
   }
 }

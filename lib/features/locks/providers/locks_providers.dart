@@ -6,6 +6,7 @@ import '../../../core/utils/logger.dart';
 import '../../../services/connection_manager.dart';
 import '../../../services/storage_service.dart';
 import '../../aws_config/providers/aws_config_providers.dart';
+import '../../things/providers/things_providers.dart';
 import '../domain/entities/lock_state.dart';
 
 // Re-export for use in UI
@@ -108,6 +109,7 @@ class LocksNotifier extends StateNotifier<LocksState> {
   Timer? _heartbeatTimer;
   StreamSubscription<ConnectionState>? _connectionSubscription;
   StreamSubscription<(String, Map<String, dynamic>)>? _shadowDeltaSubscription;
+  ProviderSubscription<AwsConfigState>? _awsConfigSubscription;
 
   LocksNotifier(this._ref) : super(const LocksState()) {
     // Start timer update loop for countdown display
@@ -116,6 +118,8 @@ class LocksNotifier extends StateNotifier<LocksState> {
     _startHeartbeat();
     // Listen to connection state changes
     _setupConnectionListeners();
+    // Listen to AWS config changes
+    _setupAwsConfigListener();
   }
 
   @override
@@ -124,7 +128,54 @@ class LocksNotifier extends StateNotifier<LocksState> {
     _heartbeatTimer?.cancel();
     _connectionSubscription?.cancel();
     _shadowDeltaSubscription?.cancel();
+    _awsConfigSubscription?.close();
     super.dispose();
+  }
+
+  void _setupAwsConfigListener() {
+    // Listen for AWS config changes
+    _awsConfigSubscription = _ref.listen<AwsConfigState>(
+      awsConfigProvider,
+      (previous, next) {
+        final previousProfile = previous?.activeProfileName;
+        final currentProfile = next.activeProfileName;
+
+        // Check if profile changed
+        if (previousProfile != currentProfile) {
+          AppLogger.info(
+              'AWS profile changed from $previousProfile to $currentProfile');
+
+          // Disconnect and clear locks when profile changes
+          _onAwsProfileChanged();
+        }
+      },
+    );
+  }
+
+  Future<void> _onAwsProfileChanged() async {
+    // Disconnect any active connections
+    if (state.isConnected || state.isConnecting) {
+      disconnect();
+    }
+
+    // Clear all locks - they belong to the old account
+    clearLocks();
+
+    // Reload locks for the new profile
+    await loadLocks();
+  }
+
+  /// Clear all locks from state
+  void clearLocks() {
+    state = state.copyWith(
+      locks: {},
+      rackGroups: {},
+      selectedLocks: {},
+      isConnected: false,
+      isConnecting: false,
+      clearError: true,
+    );
+    AppLogger.info('Cleared all locks');
   }
 
   void _setupConnectionListeners() {
@@ -267,35 +318,91 @@ class LocksNotifier extends StateNotifier<LocksState> {
     state = state.copyWith(isConnecting: true, clearError: true);
 
     try {
+      // Get current AWS profile
+      final awsConfig = _ref.read(awsConfigProvider);
+      final currentProfile = awsConfig.activeProfileName;
+
+      if (currentProfile == null) {
+        // No profile selected - don't show any things
+        state = state.copyWith(
+          locks: {},
+          rackGroups: {},
+          isConnecting: false,
+        );
+        AppLogger.info('No AWS profile selected - no locks to show');
+        return;
+      }
+
+      // Get things from AWS - load if not already loaded
+      var thingsState = _ref.read(thingsProvider);
+      if (thingsState.things.isEmpty && !thingsState.isLoading) {
+        // Things not loaded yet - trigger loading
+        AppLogger.info('Loading things from AWS for cross-reference...');
+        await _ref.read(thingsProvider.notifier).loadThings();
+        thingsState = _ref.read(thingsProvider);
+      }
+      final awsThingNames = thingsState.things.map((t) => t.thingName).toSet();
+      AppLogger.debug('AWS things for cross-reference: ${awsThingNames.length}');
+
       // Get things with local certificates
       final localThings = await StorageService.instance.listLocalThings();
-
-      // Group things by rack
-      final rackGroups = ConnectionManager.groupThingsByRack(localThings);
-      AppLogger.info('Found ${rackGroups.length} racks from ${localThings.length} things');
 
       // Filter to only lock things (not masters) for display
       final lockThings = localThings.where((name) {
         return ConnectionManager.isLockDevice(name);
       }).toList();
 
-      // Create lock states for each thing
+      // Create lock states for each thing, filtering by current profile
       final locks = <String, LockState>{};
-      for (final thingId in lockThings) {
-        // Load saved state if exists, otherwise create default
-        final config = await StorageService.instance.loadThingConfig(thingId);
-        final savedState = config?['lastState'] as Map<String, dynamic>?;
+      final thingsForProfile = <String>[];
 
+      for (final thingId in lockThings) {
+        // Load saved config to check profile association
+        var config = await StorageService.instance.loadThingConfig(thingId);
+        final thingProfile = config?['awsProfile'] as String?;
+
+        if (thingProfile != null && thingProfile != currentProfile) {
+          // Thing explicitly belongs to a different profile - skip it
+          continue;
+        }
+
+        if (thingProfile == null) {
+          // Legacy thing with no profile - check if it exists in current AWS account
+          if (!awsThingNames.contains(thingId)) {
+            AppLogger.debug(
+                'Skipping legacy thing $thingId - not found in current AWS account');
+            continue;
+          }
+          // Thing exists in AWS - associate it with current profile
+          AppLogger.info(
+              'Associating legacy thing $thingId with profile $currentProfile');
+          config ??= {};
+          config['awsProfile'] = currentProfile;
+          await StorageService.instance.saveThingConfig(thingId, config);
+        }
+
+        // Thing matches current profile (or is legacy and exists in AWS)
+        thingsForProfile.add(thingId);
+
+        final savedState = config?['lastState'] as Map<String, dynamic>?;
         if (savedState != null) {
+          // Clear timer when loading - timer is transient and should not persist
+          final stateWithoutTimer = Map<String, dynamic>.from(savedState);
+          stateWithoutTimer.remove('timer');
           locks[thingId] = LockState.fromShadowState(
             thingId,
-            savedState,
+            stateWithoutTimer,
             connected: false,
           );
         } else {
           locks[thingId] = LockState(thingId: thingId);
         }
       }
+
+      // Group only the things for current profile by rack
+      final rackGroups = ConnectionManager.groupThingsByRack(thingsForProfile);
+      AppLogger.info(
+          'Found ${rackGroups.length} racks from ${thingsForProfile.length} things for profile: $currentProfile');
 
       state = state.copyWith(
         locks: locks,
@@ -550,6 +657,13 @@ class LocksNotifier extends StateNotifier<LocksState> {
       final config =
           await StorageService.instance.loadThingConfig(thingId) ?? {};
       config['lastState'] = lock.toReportedState();
+
+      // Associate thing with current AWS profile (if not already set)
+      final currentProfile = _ref.read(awsConfigProvider).activeProfileName;
+      if (currentProfile != null && config['awsProfile'] == null) {
+        config['awsProfile'] = currentProfile;
+      }
+
       await StorageService.instance.saveThingConfig(thingId, config);
     } catch (e) {
       AppLogger.error('Failed to save local state for $thingId', e);

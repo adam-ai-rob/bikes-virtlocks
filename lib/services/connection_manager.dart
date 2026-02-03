@@ -141,11 +141,18 @@ class ConnectionManager {
   /// Check if a thing is a lock device
   static bool isLockDevice(String thingName) {
     final parsed = parseThingName(thingName);
-    if (parsed == null) return false;
-    final deviceType = parsed.$3.toUpperCase();
-    return deviceType.startsWith('LOCK') ||
-        deviceType.contains('BIKE') ||
-        deviceType.contains('SCOOTER');
+    if (parsed != null) {
+      // Standard naming: check device type part
+      final deviceType = parsed.$3.toUpperCase();
+      return deviceType.startsWith('LOCK') ||
+          deviceType.contains('BIKE') ||
+          deviceType.contains('SCOOTER');
+    }
+    // Non-standard naming: check the full thing name for keywords
+    final upperName = thingName.toUpperCase();
+    return upperName.contains('LOCK') ||
+        upperName.contains('BIKE') ||
+        upperName.contains('SCOOTER');
   }
 
   /// Group things by rack
@@ -364,7 +371,7 @@ class ConnectionManager {
 
         _setupMessageListener(connectionId, client);
 
-        // Subscribe to shadow deltas for all managed things
+        // Subscribe to shadow deltas for all managed things in the rack
         for (final managedThing in managedThingIds) {
           await _subscribeShadowDelta(client, managedThing);
         }
@@ -575,6 +582,14 @@ class ConnectionManager {
   void _onAutoReconnected(String connectionId) {
     AppLogger.info('[$connectionId] Auto-reconnected');
     _updateConnectionState(connectionId, ConnectionState.connected);
+
+    // Re-subscribe to shadow deltas after reconnection (subscriptions lost due to clean session)
+    final connection = _connections[connectionId];
+    if (connection != null && connection.client != null) {
+      for (final managedThing in connection.managedThingIds) {
+        _subscribeShadowDelta(connection.client!, managedThing);
+      }
+    }
   }
 
   /// Dispose resources

@@ -18,6 +18,7 @@ class _AwsConfigScreenState extends ConsumerState<AwsConfigScreen> {
   final _profileNameController = TextEditingController();
   final _regionController = TextEditingController(text: 'eu-west-1');
   final _endpointController = TextEditingController();
+  final _policyNameController = TextEditingController();
   final _accessKeyController = TextEditingController();
   final _secretKeyController = TextEditingController();
 
@@ -45,6 +46,7 @@ class _AwsConfigScreenState extends ConsumerState<AwsConfigScreen> {
     _profileNameController.dispose();
     _regionController.dispose();
     _endpointController.dispose();
+    _policyNameController.dispose();
     _accessKeyController.dispose();
     _secretKeyController.dispose();
     super.dispose();
@@ -57,9 +59,11 @@ class _AwsConfigScreenState extends ConsumerState<AwsConfigScreen> {
 
     try {
       final profileName = _profileNameController.text.trim();
+      final policyName = _policyNameController.text.trim();
       final credentials = {
         'region': _regionController.text.trim(),
         'endpoint': _endpointController.text.trim(),
+        'policyName': policyName.isNotEmpty ? policyName : null,
         'accessKeyId': _accessKeyController.text.trim(),
         'secretAccessKey': _secretKeyController.text.trim(),
       };
@@ -74,6 +78,7 @@ class _AwsConfigScreenState extends ConsumerState<AwsConfigScreen> {
       // Clear form
       _profileNameController.clear();
       _endpointController.clear();
+      _policyNameController.clear();
       _accessKeyController.clear();
       _secretKeyController.clear();
       _regionController.text = 'eu-west-1';
@@ -144,6 +149,7 @@ class _AwsConfigScreenState extends ConsumerState<AwsConfigScreen> {
         _profileNameController.text = profileName;
         _regionController.text = profile['region'] ?? 'eu-west-1';
         _endpointController.text = profile['endpoint'] ?? '';
+        _policyNameController.text = profile['policyName'] ?? '';
         _accessKeyController.text = profile['accessKeyId'] ?? '';
         _secretKeyController.text = profile['secretAccessKey'] ?? '';
       });
@@ -370,6 +376,14 @@ class _AwsConfigScreenState extends ConsumerState<AwsConfigScreen> {
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ],
+                                if (awsConfig.hasPolicyName) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'IoT Policy: ${awsConfig.iotPolicyName}',
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
                               ],
                             ),
                           ),
@@ -587,6 +601,20 @@ class _AwsConfigScreenState extends ConsumerState<AwsConfigScreen> {
                       ),
                       const SizedBox(height: 16),
 
+                      // IoT Policy Name
+                      TextFormField(
+                        controller: _policyNameController,
+                        decoration: const InputDecoration(
+                          labelText: 'IoT Policy Name (optional)',
+                          hintText: 'e.g., dev-hbr-api-bike-iot-policy',
+                          helperText:
+                              'Policy to attach when creating new things. Leave empty for default.',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.policy),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
                       // Access Key ID
                       TextFormField(
                         controller: _accessKeyController,
@@ -645,6 +673,7 @@ class _AwsConfigScreenState extends ConsumerState<AwsConfigScreen> {
                               _profileNameController.clear();
                               _regionController.text = 'eu-west-1';
                               _endpointController.clear();
+                              _policyNameController.clear();
                               _accessKeyController.clear();
                               _secretKeyController.clear();
                             },

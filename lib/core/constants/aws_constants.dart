@@ -19,7 +19,7 @@ class AwsConstants {
   static const String thingTypeRackMasterProd = 'RackMaster-prod';
 
   /// IoT policy name template
-  static String iotPolicyName(String env) => '$env-bikes-iot-policy';
+  static String iotPolicyName(String env) => '$env-hbr-api-bike-iot-policy';
 
   /// Thing name templates
   static String lockThingName(String env, String rackName, int index) {

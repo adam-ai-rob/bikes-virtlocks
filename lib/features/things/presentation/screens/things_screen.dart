@@ -374,7 +374,7 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
                 _DetailRow(
                     label: 'Device Type', value: thing.deviceType ?? 'Unknown'),
                 _DetailRow(label: 'Thing Type', value: thing.thingTypeName ?? 'N/A'),
-                _DetailRow(label: 'Lobby', value: thing.lobby ?? 'N/A'),
+                _DetailRow(label: 'Location', value: thing.lobby ?? 'N/A'),
                 _DetailRow(
                     label: 'Enabled', value: thing.isEnabled ? 'Yes' : 'No'),
                 _DetailRow(
@@ -525,20 +525,12 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
       // Show error
       if (mounted) {
         final error = ref.read(thingsProvider).error;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(error ?? 'Failed to download certificate'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        _showErrorDialog(context, 'Download Failed', error ?? 'Failed to download certificate');
       }
     }
   }
 
   Future<void> _importPrivateKey(String thingName) async {
-    // Save scaffold messenger before async operation
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-
     // Pick a private key file
     final result = await FilePicker.platform.pickFiles(
       type: FileType.any,
@@ -552,24 +544,64 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
 
     final filePath = result.files.single.path;
     if (filePath == null) {
-      scaffoldMessenger.showSnackBar(
-        const SnackBar(
-          content: Text('Could not access selected file'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        _showErrorDialog(context, 'File Error', 'Could not access selected file');
+      }
       return;
     }
 
     // Import the private key
     final success = await ref.read(thingsProvider.notifier).importPrivateKey(thingName, filePath);
 
-    scaffoldMessenger.showSnackBar(
-      SnackBar(
-        content: Text(success
-            ? 'Private key imported for "$thingName"'
-            : ref.read(thingsProvider).error ?? 'Failed to import private key'),
-        backgroundColor: success ? Colors.green : Colors.red,
+    if (mounted) {
+      if (success) {
+        _showSuccessDialog(context, 'Import Successful', 'Private key imported for "$thingName"');
+      } else {
+        _showErrorDialog(context, 'Import Failed', ref.read(thingsProvider).error ?? 'Failed to import private key');
+      }
+    }
+  }
+
+  void _showErrorDialog(BuildContext context, String title, String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.error, color: Colors.red),
+            const SizedBox(width: 8),
+            Text(title),
+          ],
+        ),
+        content: Text(message),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSuccessDialog(BuildContext context, String title, String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.check_circle, color: Colors.green),
+            const SizedBox(width: 8),
+            Text(title),
+          ],
+        ),
+        content: Text(message),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
       ),
     );
   }
@@ -623,7 +655,7 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
                 TextField(
                   controller: lobbyController,
                   decoration: const InputDecoration(
-                    labelText: 'Lobby / Location',
+                    labelText: 'Location',
                     hintText: 'e.g., Building A Lobby',
                     border: OutlineInputBorder(),
                   ),
@@ -656,14 +688,11 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
                     );
 
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(success
-                          ? 'Updated "${thing.thingName}"'
-                          : 'Failed to update thing'),
-                      backgroundColor: success ? Colors.green : Colors.red,
-                    ),
-                  );
+                  if (success) {
+                    _showSuccessDialog(context, 'Updated', 'Updated "${thing.thingName}"');
+                  } else {
+                    _showErrorDialog(context, 'Update Failed', 'Failed to update thing');
+                  }
                 }
               },
               child: const Text('Save'),
@@ -708,13 +737,12 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
     if (confirmed == true && mounted) {
       final success =
           await ref.read(thingsProvider.notifier).deleteThing(thing.thingName);
-      if (success && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Deleted "${thing.thingName}"'),
-            backgroundColor: Colors.green,
-          ),
-        );
+      if (mounted) {
+        if (success) {
+          _showSuccessDialog(context, 'Deleted', 'Deleted "${thing.thingName}"');
+        } else {
+          _showErrorDialog(context, 'Delete Failed', ref.read(thingsProvider).error ?? 'Failed to delete thing');
+        }
       }
     }
   }
@@ -788,7 +816,7 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
                 TextField(
                   controller: lobbyController,
                   decoration: const InputDecoration(
-                    labelText: 'Lobby (optional)',
+                    labelText: 'Location (optional)',
                     hintText: 'e.g., Building A Lobby',
                     border: OutlineInputBorder(),
                   ),
@@ -922,25 +950,22 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
   }
 
   void _showDeleteRackDialog(BuildContext context) {
+    // Capture parent context for use after async operations
+    final parentContext = context;
     final thingsState = ref.read(thingsProvider);
     final racks = ref.read(thingsProvider.notifier).getUniqueRacks();
 
     if (racks.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No racks found'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      _showErrorDialog(parentContext, 'No Racks', 'No racks found to delete');
       return;
     }
 
     String? selectedRack = racks.first;
 
     showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
+      context: parentContext,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
           // Get things for selected rack
           List<ThingModel> rackThings = [];
           if (selectedRack != null) {
@@ -1022,7 +1047,7 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(dialogContext),
                 child: const Text('Cancel'),
               ),
               FilledButton(
@@ -1030,27 +1055,32 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
                 onPressed: selectedRack == null || rackThings.isEmpty
                     ? null
                     : () async {
-                        Navigator.pop(context);
+                        // Capture values before closing dialog
+                        final rackToDelete = selectedRack!;
+                        final thingCount = rackThings.length;
 
-                        // Show confirmation
+                        // Close the selection dialog first
+                        Navigator.pop(dialogContext);
+
+                        // Show confirmation dialog
                         final confirmed = await showDialog<bool>(
                           context: context,
-                          builder: (context) => AlertDialog(
+                          builder: (confirmContext) => AlertDialog(
                             title: const Text('Confirm Deletion'),
                             content: Text(
-                              'Are you sure you want to delete rack "$selectedRack" '
-                              'and all ${rackThings.length} things?\n\n'
+                              'Are you sure you want to delete rack "$rackToDelete" '
+                              'and all $thingCount things?\n\n'
                               'This action cannot be undone.',
                             ),
                             actions: [
                               TextButton(
-                                onPressed: () => Navigator.pop(context, false),
+                                onPressed: () => Navigator.pop(confirmContext, false),
                                 child: const Text('Cancel'),
                               ),
                               FilledButton(
                                 style: FilledButton.styleFrom(
                                     backgroundColor: Colors.red),
-                                onPressed: () => Navigator.pop(context, true),
+                                onPressed: () => Navigator.pop(confirmContext, true),
                                 child: const Text('Delete'),
                               ),
                             ],
@@ -1058,14 +1088,8 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
                         );
 
                         if (confirmed == true && mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Deleting rack...'),
-                              duration: Duration(seconds: 30),
-                            ),
-                          );
-
-                          final parts = selectedRack!.split('-');
+                          // Do the work (provider will handle loading state)
+                          final parts = rackToDelete.split('-');
                           final result = await ref
                               .read(thingsProvider.notifier)
                               .deleteRack(
@@ -1073,8 +1097,8 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
                                 rackName: parts[1],
                               );
 
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).clearSnackBars();
+                          // Show result using a fresh dialog
+                          if (mounted) {
                             _showRackDeletionResult(context, result);
                           }
                         }
@@ -1153,141 +1177,136 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
   }
 
   void _showCreateRackDialog(BuildContext context) {
+    // Capture parent context for use after async operations
+    final parentContext = context;
     final nameController = TextEditingController();
     String environment = 'dev';
     int bikeCount = 4;
     int scooterCount = 0;
-    final lobbyController = TextEditingController();
 
     showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+      context: parentContext,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
           title: const Text('Create New Rack'),
           content: SizedBox(
             width: 450,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Rack Name',
-                    hintText: 'e.g., RACK07',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
-                  value: environment,
-                  decoration: const InputDecoration(
-                    labelText: 'Environment',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: const [
-                    DropdownMenuItem(value: 'dev', child: Text('Development')),
-                    DropdownMenuItem(value: 'test', child: Text('Test')),
-                    DropdownMenuItem(value: 'staging', child: Text('Staging')),
-                    DropdownMenuItem(value: 'prod', child: Text('Production')),
-                  ],
-                  onChanged: (value) {
-                    setDialogState(() => environment = value!);
-                  },
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Bike Locks'),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              IconButton(
-                                onPressed: bikeCount > 0
-                                    ? () => setDialogState(() => bikeCount--)
-                                    : null,
-                                icon: const Icon(Icons.remove),
-                              ),
-                              Text('$bikeCount',
-                                  style: Theme.of(context).textTheme.titleLarge),
-                              IconButton(
-                                onPressed: () => setDialogState(() => bikeCount++),
-                                icon: const Icon(Icons.add),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Rack Name',
+                      hintText: 'e.g., RACK07',
+                      border: OutlineInputBorder(),
                     ),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Scooter Locks'),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              IconButton(
-                                onPressed: scooterCount > 0
-                                    ? () => setDialogState(() => scooterCount--)
-                                    : null,
-                                icon: const Icon(Icons.remove),
-                              ),
-                              Text('$scooterCount',
-                                  style: Theme.of(context).textTheme.titleLarge),
-                              IconButton(
-                                onPressed: () =>
-                                    setDialogState(() => scooterCount++),
-                                icon: const Icon(Icons.add),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: lobbyController,
-                  decoration: const InputDecoration(
-                    labelText: 'Lobby (optional)',
-                    hintText: 'e.g., Building A Lobby',
-                    border: OutlineInputBorder(),
+                    onChanged: (_) => setDialogState(() {}),
                   ),
-                ),
-                const SizedBox(height: 16),
-                Card(
-                  color: Colors.blue.shade50,
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Preview',
-                          style: TextStyle(fontWeight: FontWeight.bold),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    value: environment,
+                    decoration: const InputDecoration(
+                      labelText: 'Environment',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'dev', child: Text('Development')),
+                      DropdownMenuItem(value: 'test', child: Text('Test')),
+                      DropdownMenuItem(value: 'staging', child: Text('Staging')),
+                      DropdownMenuItem(value: 'prod', child: Text('Production')),
+                    ],
+                    onChanged: (value) {
+                      setDialogState(() => environment = value!);
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Bike Locks'),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                IconButton(
+                                  onPressed: bikeCount > 0
+                                      ? () => setDialogState(() => bikeCount--)
+                                      : null,
+                                  icon: const Icon(Icons.remove),
+                                ),
+                                Text('$bikeCount',
+                                    style: Theme.of(dialogContext).textTheme.titleLarge),
+                                IconButton(
+                                  onPressed: () => setDialogState(() => bikeCount++),
+                                  icon: const Icon(Icons.add),
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 8),
-                        Text('This will create ${1 + bikeCount + scooterCount} things:'),
-                        Text('  - 1 master: $environment-${nameController.text.isEmpty ? "RACK" : nameController.text}-master'),
-                        if (bikeCount > 0)
-                          Text('  - $bikeCount bikes: $environment-${nameController.text.isEmpty ? "RACK" : nameController.text}-bike1...$bikeCount'),
-                        if (scooterCount > 0)
-                          Text('  - $scooterCount scooters: $environment-${nameController.text.isEmpty ? "RACK" : nameController.text}-scooter1...$scooterCount'),
-                      ],
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Scooter Locks'),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                IconButton(
+                                  onPressed: scooterCount > 0
+                                      ? () => setDialogState(() => scooterCount--)
+                                      : null,
+                                  icon: const Icon(Icons.remove),
+                                ),
+                                Text('$scooterCount',
+                                    style: Theme.of(dialogContext).textTheme.titleLarge),
+                                IconButton(
+                                  onPressed: () =>
+                                      setDialogState(() => scooterCount++),
+                                  icon: const Icon(Icons.add),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Card(
+                    color: Colors.blue.shade50,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Preview',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 8),
+                          Text('This will create ${1 + bikeCount + scooterCount} things:'),
+                          Text('  - 1 master: $environment-${nameController.text.isEmpty ? "RACK" : nameController.text}-MASTER'),
+                          if (bikeCount > 0)
+                            Text('  - $bikeCount bikes: $environment-${nameController.text.isEmpty ? "RACK" : nameController.text}-LOCK01...${bikeCount.toString().padLeft(2, '0')}'),
+                          if (scooterCount > 0)
+                            Text('  - $scooterCount scooters: $environment-${nameController.text.isEmpty ? "RACK" : nameController.text}-LOCK${(bikeCount + 1).toString().padLeft(2, '0')}...${(bikeCount + scooterCount).toString().padLeft(2, '0')}'),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.pop(dialogContext),
               child: const Text('Cancel'),
             ),
             FilledButton(
@@ -1295,38 +1314,30 @@ class _ThingsScreenState extends ConsumerState<ThingsScreen> {
                 if (nameController.text.isEmpty) return;
                 if (bikeCount == 0 && scooterCount == 0) return;
 
-                Navigator.pop(context);
+                // Capture values before closing dialog
+                final rackName = nameController.text;
+                final bikes = bikeCount;
+                final scooters = scooterCount;
+                final env = environment;
 
-                // Show progress
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Creating rack...'),
-                    duration: Duration(seconds: 30),
-                  ),
-                );
+                // Close the create rack dialog first
+                Navigator.pop(dialogContext);
 
+                // Do the work (provider will handle loading state)
                 final result = await ref.read(thingsProvider.notifier).createRack(
-                      environment: environment,
-                      rackName: nameController.text,
-                      bikeLockCount: bikeCount,
-                      scooterLockCount: scooterCount,
-                      lobby: lobbyController.text.isNotEmpty
-                          ? lobbyController.text
-                          : null,
+                      environment: env,
+                      rackName: rackName,
+                      bikeLockCount: bikes,
+                      scooterLockCount: scooters,
                     );
 
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).clearSnackBars();
-
+                // Show result using a fresh dialog
+                if (mounted) {
                   if (result != null) {
                     _showRackCreationResult(context, result);
                   } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Failed to create rack'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
+                    final error = ref.read(thingsProvider).error;
+                    _showErrorDialog(context, 'Failed to Create Rack', error ?? 'Unknown error occurred');
                   }
                 }
               },

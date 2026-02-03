@@ -15,6 +15,7 @@ class AwsConfigState {
   final String? activeProfileName;
   final Map<String, dynamic>? activeProfileCredentials;
   final String? iotEndpoint;
+  final String? iotPolicyName;
   final bool isConnecting;
   final bool isConnected;
   final String? lastError;
@@ -25,6 +26,7 @@ class AwsConfigState {
     this.activeProfileName,
     this.activeProfileCredentials,
     this.iotEndpoint,
+    this.iotPolicyName,
     this.isConnecting = false,
     this.isConnected = false,
     this.lastError,
@@ -36,6 +38,7 @@ class AwsConfigState {
     String? activeProfileName,
     Map<String, dynamic>? activeProfileCredentials,
     String? iotEndpoint,
+    String? iotPolicyName,
     bool? isConnecting,
     bool? isConnected,
     String? lastError,
@@ -51,6 +54,7 @@ class AwsConfigState {
       activeProfileCredentials:
           clearActiveProfile ? null : (activeProfileCredentials ?? this.activeProfileCredentials),
       iotEndpoint: clearEndpoint ? null : (iotEndpoint ?? this.iotEndpoint),
+      iotPolicyName: clearActiveProfile ? null : (iotPolicyName ?? this.iotPolicyName),
       isConnecting: isConnecting ?? this.isConnecting,
       isConnected: isConnected ?? this.isConnected,
       lastError: clearError ? null : lastError,
@@ -61,6 +65,7 @@ class AwsConfigState {
 
   bool get hasActiveProfile => activeProfileName != null;
   bool get hasEndpoint => iotEndpoint != null && iotEndpoint!.isNotEmpty;
+  bool get hasPolicyName => iotPolicyName != null && iotPolicyName!.isNotEmpty;
 }
 
 /// Provider for managing AWS configuration state
@@ -78,10 +83,12 @@ class AwsConfigNotifier extends StateNotifier<AwsConfigState> {
       final hasCaCert = await StorageService.instance.caCertExists();
       Map<String, dynamic>? credentials;
       String? endpoint;
+      String? policyName;
 
       if (activeProfileName != null) {
         credentials = await StorageService.instance.loadAwsProfile(activeProfileName);
         endpoint = credentials?['endpoint'] as String?;
+        policyName = credentials?['policyName'] as String?;
 
         // Initialize the AWS IoT service with saved credentials
         if (credentials != null) {
@@ -99,6 +106,7 @@ class AwsConfigNotifier extends StateNotifier<AwsConfigState> {
         activeProfileName: activeProfileName,
         activeProfileCredentials: credentials,
         iotEndpoint: endpoint,
+        iotPolicyName: policyName,
         hasCaCert: hasCaCert,
       );
     } catch (e, stackTrace) {
@@ -128,6 +136,7 @@ class AwsConfigNotifier extends StateNotifier<AwsConfigState> {
 
       // Initialize the AWS IoT service with new credentials
       final endpoint = credentials['endpoint'] as String?;
+      final policyName = credentials['policyName'] as String?;
       _iotService.initialize(
         region: credentials['region'] as String? ?? 'eu-west-1',
         accessKeyId: credentials['accessKeyId'] as String? ?? '',
@@ -139,6 +148,7 @@ class AwsConfigNotifier extends StateNotifier<AwsConfigState> {
         activeProfileName: profileName,
         activeProfileCredentials: credentials,
         iotEndpoint: endpoint,
+        iotPolicyName: policyName,
         isConnecting: false,
         isConnected: false, // Not yet connected to MQTT
       );
@@ -243,6 +253,28 @@ class AwsConfigNotifier extends StateNotifier<AwsConfigState> {
     state = state.copyWith(clearError: true);
   }
 
+  /// Save the IoT policy name for the current profile
+  Future<void> savePolicyName(String policyName) async {
+    if (state.activeProfileName == null || state.activeProfileCredentials == null) {
+      throw Exception('No active profile to save policy name to');
+    }
+
+    final updatedCredentials = Map<String, dynamic>.from(state.activeProfileCredentials!);
+    updatedCredentials['policyName'] = policyName;
+
+    await StorageService.instance.saveAwsProfile(
+      state.activeProfileName!,
+      updatedCredentials,
+    );
+
+    state = state.copyWith(
+      iotPolicyName: policyName,
+      activeProfileCredentials: updatedCredentials,
+    );
+
+    AppLogger.info('Saved IoT policy name: $policyName');
+  }
+
   /// Check if CA certificate exists
   Future<void> checkCaCert() async {
     final exists = await StorageService.instance.caCertExists();
@@ -315,6 +347,11 @@ final activeAwsProfileProvider = Provider<String?>((ref) {
 /// Convenience provider for the IoT endpoint
 final iotEndpointProvider = Provider<String?>((ref) {
   return ref.watch(awsConfigProvider).iotEndpoint;
+});
+
+/// Convenience provider for the IoT policy name
+final iotPolicyNameProvider = Provider<String?>((ref) {
+  return ref.watch(awsConfigProvider).iotPolicyName;
 });
 
 /// Convenience provider for CA certificate status

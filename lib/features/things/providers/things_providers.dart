@@ -264,11 +264,16 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
     state = state.copyWith(isLoading: true, clearError: true);
 
     try {
+      // Get policy name from AWS config
+      final awsConfig = _ref.read(awsConfigProvider);
+      final policyName = awsConfig.iotPolicyName;
+
       final result = await _iotService.createThingWithCertificate(
         thingName: thingName,
         environment: environment,
         thingTypeName: thingTypeName,
         attributes: attributes,
+        policyName: policyName,
       );
 
       // Save certificates locally
@@ -279,7 +284,8 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
         publicKey: result.certificate.publicKey,
       );
 
-      // Save thing config
+      // Save thing config with AWS profile association
+      final currentProfile = awsConfig.activeProfileName;
       await StorageService.instance.saveThingConfig(thingName, {
         'thingArn': result.thing.thingArn,
         'certificateArn': result.certificate.certificateArn,
@@ -287,6 +293,7 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
         'environment': environment,
         'attributes': attributes,
         'createdAt': DateTime.now().toIso8601String(),
+        'awsProfile': currentProfile,
       });
 
       // Reload things
@@ -378,7 +385,6 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
     required String rackName,
     required int bikeLockCount,
     int scooterLockCount = 0,
-    String? lobby,
   }) async {
     state = state.copyWith(isLoading: true, clearError: true);
 
@@ -386,25 +392,23 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
     final errors = <String>[];
 
     try {
+      // Get current AWS profile for association
+      final currentProfile = _ref.read(awsConfigProvider).activeProfileName;
+
       // 1. Create shared certificate first
       AppLogger.info('Creating shared certificate for rack: $rackName');
       final certResult = await _iotService.createKeysAndCertificate();
 
       // 2. Create master thing
       final masterName = AwsConstants.masterThingName(environment, rackName);
-      AppLogger.info('Creating master: $masterName');
+      final masterType = _getMasterThingType(environment);
+      AppLogger.info('Creating master: $masterName with type: $masterType');
 
       try {
-        final masterType = _getMasterThingType(environment);
         await _iotService.createThing(
           thingName: masterName,
           thingTypeName: masterType,
-          attributes: {
-            'enabled': 'true',
-            'type': 'master',
-            'environment': environment,
-            if (lobby != null) 'lobby': lobby,
-          },
+          // No attributes - tracked in DynamoDB by other application
         );
 
         // Attach certificate to master
@@ -413,9 +417,11 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
           principal: certResult.certificateArn,
         );
 
-        // Attach policy
+        // Attach policy (use configured policy name or fall back to default)
+        final configuredPolicyName = _ref.read(awsConfigProvider).iotPolicyName;
+        final effectivePolicyName = configuredPolicyName ?? AwsConstants.iotPolicyName(environment);
         await _iotService.attachPolicy(
-          policyName: AwsConstants.iotPolicyName(environment),
+          policyName: effectivePolicyName,
           target: certResult.certificateArn,
         );
 
@@ -434,6 +440,7 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
           'rackName': rackName,
           'type': 'master',
           'createdAt': DateTime.now().toIso8601String(),
+          'awsProfile': currentProfile,
         });
 
         createdThings.add(masterName);
@@ -446,18 +453,13 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
       final lockType = _getLockThingType(environment);
       for (int i = 1; i <= bikeLockCount; i++) {
         final lockName = AwsConstants.lockThingName(environment, rackName, i);
-        AppLogger.info('Creating bike lock: $lockName');
+        AppLogger.info('Creating bike lock: $lockName with type: $lockType');
 
         try {
           await _iotService.createThing(
             thingName: lockName,
             thingTypeName: lockType,
-            attributes: {
-              'enabled': 'true',
-              'type': 'bike',
-              'environment': environment,
-              if (lobby != null) 'lobby': lobby,
-            },
+            // No attributes - tracked in DynamoDB by other application
           );
 
           // Attach shared certificate
@@ -481,6 +483,7 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
             'rackName': rackName,
             'type': 'bike',
             'createdAt': DateTime.now().toIso8601String(),
+            'awsProfile': currentProfile,
           });
 
           createdThings.add(lockName);
@@ -490,22 +493,17 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
         }
       }
 
-      // 4. Create scooter locks if requested
+      // 4. Create scooter locks if requested (use same lock type as bikes)
       for (int i = 1; i <= scooterLockCount; i++) {
-        final index = bikeLockCount + i;
-        final lockName = '${environment}-${rackName}-SCOOTER${i.toString().padLeft(2, '0')}';
-        AppLogger.info('Creating scooter lock: $lockName');
+        final lockIndex = bikeLockCount + i;
+        final lockName = AwsConstants.lockThingName(environment, rackName, lockIndex);
+        AppLogger.info('Creating scooter lock: $lockName with type: $lockType');
 
         try {
           await _iotService.createThing(
             thingName: lockName,
             thingTypeName: lockType,
-            attributes: {
-              'enabled': 'true',
-              'type': 'scooter',
-              'environment': environment,
-              if (lobby != null) 'lobby': lobby,
-            },
+            // No attributes - tracked in DynamoDB by other application
           );
 
           // Attach shared certificate
@@ -529,6 +527,7 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
             'rackName': rackName,
             'type': 'scooter',
             'createdAt': DateTime.now().toIso8601String(),
+            'awsProfile': currentProfile,
           });
 
           createdThings.add(lockName);
@@ -553,7 +552,6 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
           'certificateArn': certResult.certificateArn,
           'certificateId': certResult.certificateId,
           'things': createdThings,
-          'lobby': lobby,
           'createdAt': DateTime.now().toIso8601String(),
         },
       );
@@ -626,6 +624,8 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
   }
 
   /// Delete a rack and all its things
+  /// Properly handles shared certificates by detaching from all things first,
+  /// then deleting all things, and finally deleting the shared certificate
   Future<RackDeletionResult> deleteRack({
     required String environment,
     required String rackName,
@@ -634,6 +634,7 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
 
     final deletedThings = <String>[];
     final errors = <String>[];
+    String? sharedCertificateId;
 
     try {
       // Find all things in this rack
@@ -646,16 +647,41 @@ class ThingsNotifier extends StateNotifier<ThingsState> {
       AppLogger.info(
           'Deleting rack $rackName with ${rackThings.length} things');
 
-      // Delete each thing
+      // First, get the shared certificate from the first thing
+      try {
+        final principals = await _iotService.listThingPrincipals(rackThings.first.thingName);
+        if (principals.isNotEmpty) {
+          sharedCertificateId = principals.first.split('/').last;
+          AppLogger.info('Found shared certificate: $sharedCertificateId');
+        }
+      } catch (e) {
+        AppLogger.warning('Could not find shared certificate: $e');
+      }
+
+      // Delete each thing WITHOUT deleting the certificate (since it's shared)
       for (final thing in rackThings) {
         try {
-          await _iotService.deleteThingWithCertificates(thing.thingName);
+          await _iotService.deleteThingWithCertificates(
+            thing.thingName,
+            skipCertificateDelete: true,
+          );
           await StorageService.instance.deleteThingCertificates(thing.thingName);
           deletedThings.add(thing.thingName);
           AppLogger.info('Deleted thing: ${thing.thingName}');
         } catch (e) {
           errors.add('Failed to delete ${thing.thingName}: $e');
           AppLogger.error('Failed to delete ${thing.thingName}', e);
+        }
+      }
+
+      // Now delete the shared certificate (after all things are deleted)
+      if (sharedCertificateId != null && errors.isEmpty) {
+        try {
+          await _iotService.deleteCertificateById(sharedCertificateId);
+          AppLogger.info('Deleted shared certificate: $sharedCertificateId');
+        } catch (e) {
+          errors.add('Failed to delete shared certificate: $e');
+          AppLogger.error('Failed to delete shared certificate', e);
         }
       }
 

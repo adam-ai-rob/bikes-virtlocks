@@ -500,6 +500,8 @@ class _LocksScreenState extends ConsumerState<LocksScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _DetailRow(label: 'Thing Name', value: lock.thingId),
+              const Divider(),
               _DetailRow(label: 'Connected', value: lock.connected ? 'Yes' : 'No'),
               _DetailRow(label: 'Locked', value: lock.isLocked ? 'Yes' : 'No'),
               _DetailRow(label: 'Empty', value: lock.isEmpty ? 'Yes' : 'No'),

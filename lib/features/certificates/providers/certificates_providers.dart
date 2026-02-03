@@ -235,6 +235,14 @@ class CertificatesNotifier extends StateNotifier<CertificatesState> {
         privateKey: keyContent,
       );
 
+      // Save config with AWS profile association
+      final currentProfile = _ref.read(awsConfigProvider).activeProfileName;
+      final existingConfig =
+          await StorageService.instance.loadThingConfig(thingName) ?? {};
+      existingConfig['awsProfile'] = currentProfile;
+      existingConfig['importedAt'] = DateTime.now().toIso8601String();
+      await StorageService.instance.saveThingConfig(thingName, existingConfig);
+
       await loadCertificates();
       AppLogger.info('Imported certificates for $thingName');
       return true;
